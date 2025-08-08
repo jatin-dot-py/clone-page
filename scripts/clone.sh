@@ -12,9 +12,11 @@ FILENAME="${2:-}"
 if [ -n "$FILENAME" ]; then
   curl -s -X POST http://localhost:8080/clone \
     -H 'Content-Type: application/json' \
-    -d "{\"url\":\"$URL\",\"filename\":\"$FILENAME\"}"
+    --data-binary "{\"url\":\"$URL\",\"filename\":\"$FILENAME\"}" \
+    -o "$FILENAME"
+  echo "Saved: $FILENAME"
 else
   curl -s -X POST http://localhost:8080/clone \
     -H 'Content-Type: application/json' \
-    -d "{\"url\":\"$URL\"}"
+    --data-binary "{\"url\":\"$URL\"}"
 fi

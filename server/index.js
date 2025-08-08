@@ -19,33 +19,27 @@ app.get('/healthz', (req, res) => {
 });
 
 app.post('/clone', async (req, res) => {
-  const { url, filename, inline } = req.body || {};
+  const { url, filename, disposition } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ ok: false, error: 'Missing "url"' });
   }
   try {
     const started = Date.now();
-    await fs.mkdir(DATA_DIR, { recursive: true });
 
     const safeName = filename && filename.trim().length > 0
       ? filename.trim()
       : `${slugify(url, { lower: true, strict: true }) || 'page'}.html`;
 
-    const outPath = path.join(DATA_DIR, safeName);
-
     // Build SingleFile CLI command (deno)
-    // Using single-file-cli Deno entry: deno run with permissions
-    // See: https://github.com/gildas-lormeau/single-file-cli
     const denoArgs = [
       'run',
       '--allow-all',
       'https://raw.githubusercontent.com/gildas-lormeau/single-file-cli/master/single-file-launcher.js',
       url,
-      outPath,
+      '--dump-content',
       '--browser-executable-path=/usr/bin/chromium',
     ];
 
-    // Append optional args from env
     if (DEFAULT_WAIT) {
       denoArgs.push(...DEFAULT_WAIT.split(' '));
     }
@@ -66,16 +60,19 @@ app.post('/clone', async (req, res) => {
         return res.status(500).json({ ok: false, error: 'singlefile_failed', code, stderr });
       }
       try {
-        const stat = await fs.stat(outPath);
         const durationMs = Date.now() - started;
-        if (inline) {
-          const html = await fs.readFile(outPath, 'utf8');
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
-          return res.status(200).send(html);
-        }
-        return res.json({ ok: true, path: `/data/${safeName}`, size_bytes: stat.size, duration_ms: durationMs });
+        // Security headers; serve inline by default, allow opting into attachment via disposition
+        const contentDisposition = (disposition === 'attachment')
+          ? `attachment; filename="${safeName.replace(/"/g, '')}"`
+          : `inline; filename="${safeName.replace(/"/g, '')}"`;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Content-Disposition', contentDisposition);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "sandbox; img-src 'self' data: blob: *; media-src 'self' data: blob: *; font-src 'self' data: blob: *; style-src 'unsafe-inline' data: blob: 'self'");
+        res.setHeader('X-Clone-Duration-Ms', String(durationMs));
+        return res.status(200).send(stdout);
       } catch (e) {
-        return res.status(500).json({ ok: false, error: 'output_not_found', detail: String(e) });
+        return res.status(500).json({ ok: false, error: 'stream_failed', detail: String(e) });
       }
     });
   } catch (e) {
