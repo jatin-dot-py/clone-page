@@ -10,7 +10,7 @@ const app = express();
 app.use(bodyParser.json());
 app.use(morgan('dev'));
 
-const DATA_DIR = '/data';
+const TMP_DIR = process.env.TMP_DIR || '/tmp/webcloner';
 const DEFAULT_WAIT = process.env.SINGLEFILE_ARGS || '--browser-wait-until=networkidle2';
 const PORT = process.env.PORT || 8080;
 
@@ -25,10 +25,16 @@ app.post('/clone', async (req, res) => {
   }
   try {
     const started = Date.now();
+    await fs.mkdir(TMP_DIR, { recursive: true });
 
-    const safeName = filename && filename.trim().length > 0
+    const suggestedName = filename && filename.trim().length > 0
       ? filename.trim()
       : `${slugify(url, { lower: true, strict: true }) || 'page'}.html`;
+
+    // Use unique temp filename to avoid collisions
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempName = `${slugify(url, { lower: true, strict: true }) || 'page'}-${uniqueSuffix}.html`;
+    const outPath = path.join(TMP_DIR, tempName);
 
     // Build SingleFile CLI command (deno)
     const denoArgs = [
@@ -36,7 +42,7 @@ app.post('/clone', async (req, res) => {
       '--allow-all',
       'https://raw.githubusercontent.com/gildas-lormeau/single-file-cli/master/single-file-launcher.js',
       url,
-      '--dump-content',
+      outPath,
       '--browser-executable-path=/usr/bin/chromium',
     ];
 
@@ -44,11 +50,9 @@ app.post('/clone', async (req, res) => {
       denoArgs.push(...DEFAULT_WAIT.split(' '));
     }
 
-    const child = spawn('deno', denoArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('deno', denoArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
 
-    let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
     child.stderr.on('data', (d) => (stderr += d.toString()));
 
     child.on('error', (err) => {
@@ -61,18 +65,23 @@ app.post('/clone', async (req, res) => {
       }
       try {
         const durationMs = Date.now() - started;
-        // Security headers; serve inline by default, allow opting into attachment via disposition
+        const html = await fs.readFile(outPath, 'utf8');
+        // cleanup temp file
+        try { await fs.unlink(outPath); } catch {}
+
         const contentDisposition = (disposition === 'attachment')
-          ? `attachment; filename="${safeName.replace(/"/g, '')}"`
-          : `inline; filename="${safeName.replace(/"/g, '')}"`;
+          ? `attachment; filename="${suggestedName.replace(/"/g, '')}"`
+          : `inline; filename="${suggestedName.replace(/"/g, '')}"`;
+
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Content-Disposition', contentDisposition);
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', "sandbox; img-src 'self' data: blob: *; media-src 'self' data: blob: *; font-src 'self' data: blob: *; style-src 'unsafe-inline' data: blob: 'self'");
         res.setHeader('X-Clone-Duration-Ms', String(durationMs));
-        return res.status(200).send(stdout);
+        res.setHeader('Content-Length', String(Buffer.byteLength(html, 'utf8')));
+        return res.status(200).send(html);
       } catch (e) {
-        return res.status(500).json({ ok: false, error: 'stream_failed', detail: String(e) });
+        return res.status(500).json({ ok: false, error: 'temp_read_failed', detail: String(e) });
       }
     });
   } catch (e) {
