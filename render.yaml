@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: webcloner
+    env: docker
+    dockerfilePath: docker/app.Dockerfile
+    plan: free
+    region: oregon
+    autoDeploy: true
+    envVars:
+      - key: SINGLEFILE_ARGS
+        value: --browser-wait-until=networkidle2
+      - key: TZ
+        value: UTC
+    numInstances: 1
+    healthCheckPath: /healthz
+    disk:
+      name: shm
+      mountPath: /dev/shm
+      sizeGB: 1

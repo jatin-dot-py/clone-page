@@ -10,7 +10,7 @@ const app = express();
 app.use(bodyParser.json());
 app.use(morgan('dev'));
 
-const DATA_DIR = '/data';
+const TMP_DIR = process.env.TMP_DIR || '/tmp/webcloner';
 const DEFAULT_WAIT = process.env.SINGLEFILE_ARGS || '--browser-wait-until=networkidle2';
 const PORT = process.env.PORT || 8080;
 
@@ -19,23 +19,24 @@ app.get('/healthz', (req, res) => {
 });
 
 app.post('/clone', async (req, res) => {
-  const { url, filename, inline } = req.body || {};
+  const { url, filename, disposition } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ ok: false, error: 'Missing "url"' });
   }
   try {
     const started = Date.now();
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.mkdir(TMP_DIR, { recursive: true });
 
-    const safeName = filename && filename.trim().length > 0
+    const suggestedName = filename && filename.trim().length > 0
       ? filename.trim()
       : `${slugify(url, { lower: true, strict: true }) || 'page'}.html`;
 
-    const outPath = path.join(DATA_DIR, safeName);
+    // Use unique temp filename to avoid collisions
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempName = `${slugify(url, { lower: true, strict: true }) || 'page'}-${uniqueSuffix}.html`;
+    const outPath = path.join(TMP_DIR, tempName);
 
     // Build SingleFile CLI command (deno)
-    // Using single-file-cli Deno entry: deno run with permissions
-    // See: https://github.com/gildas-lormeau/single-file-cli
     const denoArgs = [
       'run',
       '--allow-all',
@@ -45,16 +46,13 @@ app.post('/clone', async (req, res) => {
       '--browser-executable-path=/usr/bin/chromium',
     ];
 
-    // Append optional args from env
     if (DEFAULT_WAIT) {
       denoArgs.push(...DEFAULT_WAIT.split(' '));
     }
 
-    const child = spawn('deno', denoArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('deno', denoArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
 
-    let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
     child.stderr.on('data', (d) => (stderr += d.toString()));
 
     child.on('error', (err) => {
@@ -66,16 +64,24 @@ app.post('/clone', async (req, res) => {
         return res.status(500).json({ ok: false, error: 'singlefile_failed', code, stderr });
       }
       try {
-        const stat = await fs.stat(outPath);
         const durationMs = Date.now() - started;
-        if (inline) {
-          const html = await fs.readFile(outPath, 'utf8');
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
-          return res.status(200).send(html);
-        }
-        return res.json({ ok: true, path: `/data/${safeName}`, size_bytes: stat.size, duration_ms: durationMs });
+        const html = await fs.readFile(outPath, 'utf8');
+        // cleanup temp file
+        try { await fs.unlink(outPath); } catch {}
+
+        const contentDisposition = (disposition === 'attachment')
+          ? `attachment; filename="${suggestedName.replace(/"/g, '')}"`
+          : `inline; filename="${suggestedName.replace(/"/g, '')}"`;
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Content-Disposition', contentDisposition);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "sandbox; img-src 'self' data: blob: *; media-src 'self' data: blob: *; font-src 'self' data: blob: *; style-src 'unsafe-inline' data: blob: 'self'");
+        res.setHeader('X-Clone-Duration-Ms', String(durationMs));
+        res.setHeader('Content-Length', String(Buffer.byteLength(html, 'utf8')));
+        return res.status(200).send(html);
       } catch (e) {
-        return res.status(500).json({ ok: false, error: 'output_not_found', detail: String(e) });
+        return res.status(500).json({ ok: false, error: 'temp_read_failed', detail: String(e) });
       }
     });
   } catch (e) {
