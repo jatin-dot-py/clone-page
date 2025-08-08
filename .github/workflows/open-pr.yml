@@ -1,0 +1,42 @@
+name: Open PR from feature branch to main
+
+on:
+  push:
+    branches:
+      - cursor/get-cloned-html-page-data-via-api-9526
+  workflow_dispatch: {}
+
+jobs:
+  create_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create PR via GitHub API
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            const head = process.env.GITHUB_REF_NAME;
+            const title = 'Return raw HTML by default; optional persistence; GET /clone; fallback';
+            const body = [
+              '- Returns raw HTML in response by default',
+              '- Optional persistence via persist=true, with X-Saved-Path header',
+              '- Added GET /clone for quick testing',
+              '- Fallback to Node fetch when SingleFile/Chromium is unavailable',
+              '- Updated README and scripts/clone.sh'
+            ].join('\n');
+            try {
+              const res = await github.rest.pulls.create({ owner, repo, title, head, base: 'main', body });
+              core.info(`PR created: ${res.data.html_url}`);
+            } catch (e) {
+              if (e.status === 422) {
+                core.info('PR likely already exists or no diff; attempting to find existing PR.');
+                const prs = await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${head}` });
+                if (prs.data.length > 0) {
+                  core.info(`Existing PR: ${prs.data[0].html_url}`);
+                } else {
+                  core.warning(`Could not create or find PR automatically. Error: ${e.message}`);
+                }
+              } else {
+                throw e;
+              }
+            }
