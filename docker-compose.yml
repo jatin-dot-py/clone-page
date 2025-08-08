@@ -1,0 +1,18 @@
+services:
+  webcloner:
+    build:
+      context: .
+      dockerfile: ./docker/app.Dockerfile
+    image: webcloner:latest
+    container_name: webcloner
+    restart: unless-stopped
+    environment:
+      - SINGLEFILE_ARGS=--browser-wait-until=networkidle2
+      - TZ=UTC
+    volumes:
+      - ./data:/data
+      - /dev/shm:/dev/shm
+    ports:
+      - "8080:8080"
+
+volumes: {}
